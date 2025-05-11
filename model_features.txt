@@ -1,0 +1,16 @@
+magnitude
+depth
+latitude
+longitude
+sig
+gap
+dmin
+mmi
+magType_mb
+magType_md
+magType_ml
+magType_ms
+magType_mw
+magType_mwb
+magType_mwc
+magType_mww

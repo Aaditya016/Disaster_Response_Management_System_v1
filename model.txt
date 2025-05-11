@@ -1,0 +1,236 @@
+# Tsunami Prediction Model
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import cross_val_score
+
+# File paths - update these to match your local file locations
+TRAINING_DATA_PATH = 'earthquake_1995-2023.csv'  # Main dataset
+TEST_DATA_PATH = 'testing_data1.csv'             # Test dataset
+
+# Load the data
+print("Loading earthquake data...")
+earthquake_data = pd.read_csv(TRAINING_DATA_PATH)
+
+# Data exploration
+print(f"Dataset shape: {earthquake_data.shape}")
+print(f"Number of tsunamis: {earthquake_data['tsunami'].sum()}")
+print(f"Percentage of tsunamis: {earthquake_data['tsunami'].mean() * 100:.2f}%")
+
+# Basic data preprocessing
+# Select relevant features for tsunami prediction
+features = ['magnitude', 'depth', 'latitude', 'longitude']
+
+# Add additional features if they're available in your dataset
+optional_features = ['cdi', 'mmi', 'sig', 'gap']
+for feature in optional_features:
+    if feature in earthquake_data.columns:
+        features.append(feature)
+
+print(f"Using features: {features}")
+
+# Create X (features) and y (target)
+X = earthquake_data[features]
+y = earthquake_data['tsunami']
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+# Create a pipeline for preprocessing and modeling
+pipeline = Pipeline([
+    ('imputer', SimpleImputer(strategy='median')),  # Handle missing values
+    ('scaler', StandardScaler()),                   # Scale features
+    ('classifier', RandomForestClassifier(n_estimators=100, random_state=42))  # Classification model
+])
+
+# Train the model
+print("Training the model...")
+pipeline.fit(X_train, y_train)
+
+# Evaluate the model
+print("Evaluating model performance...")
+y_pred = pipeline.predict(X_test)
+y_prob = pipeline.predict_proba(X_test)[:, 1]
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred))
+
+# Calculate and plot the ROC curve
+fpr, tpr, _ = roc_curve(y_test, y_prob)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(10, 8))
+plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic (ROC) Curve')
+plt.legend(loc="lower right")
+plt.savefig('tsunami_predictor_roc_curve.png')
+print("ROC curve saved as 'tsunami_predictor_roc_curve.png'")
+
+# Feature importance
+if hasattr(pipeline['classifier'], 'feature_importances_'):
+    feature_importance = pd.DataFrame({
+        'Feature': features,
+        'Importance': pipeline['classifier'].feature_importances_
+    }).sort_values('Importance', ascending=False)
+    
+    plt.figure(figsize=(10, 8))
+    sns.barplot(x='Importance', y='Feature', data=feature_importance)
+    plt.title('Feature Importance for Tsunami Prediction')
+    plt.tight_layout()
+    plt.savefig('tsunami_predictor_feature_importance.png')
+    print("Feature importance plot saved as 'tsunami_predictor_feature_importance.png'")
+    print("\nFeature Importance:")
+    print(feature_importance)
+
+# Create a function for tsunami prediction and alert system
+def tsunami_alert_system(earthquake_data):
+    """
+    Predict tsunami probability and generate appropriate alert level.
+    
+    Parameters:
+    earthquake_data (dict): Dictionary containing earthquake features
+    
+    Returns:
+    dict: Prediction results with probability and alert level
+    """
+    # Create a DataFrame with the input data
+    input_df = pd.DataFrame([earthquake_data])
+    
+    # Select only the features used in the model
+    input_features = input_df[features]
+    
+    # Get the probability of tsunami
+    tsunami_prob = pipeline.predict_proba(input_features)[0, 1]
+    
+    # Define alert levels based on probability
+    if tsunami_prob < 0.2:
+        alert_level = "Low Risk"
+        recommendation = "No immediate action required. Continue monitoring."
+    elif tsunami_prob < 0.5:
+        alert_level = "Medium Risk"
+        recommendation = "Be prepared. Monitor official channels for updates."
+    elif tsunami_prob < 0.8:
+        alert_level = "High Risk"
+        recommendation = "Prepare for possible evacuation. Follow official guidance."
+    else:
+        alert_level = "Severe Risk"
+        recommendation = "Immediate evacuation from coastal areas is recommended."
+    
+    return {
+        "tsunami_probability": tsunami_prob,
+        "alert_level": alert_level,
+        "recommendation": recommendation,
+        "earthquake_magnitude": earthquake_data['magnitude'],
+        "earthquake_depth": earthquake_data['depth'],
+        "location": f"{earthquake_data.get('latitude', 'Unknown')}, {earthquake_data.get('longitude', 'Unknown')}"
+    }
+
+# Test with example earthquake data
+print("\nTesting the model with sample earthquakes...")
+
+# Example 1: Large shallow earthquake (high tsunami risk)
+example1 = {
+    'magnitude': 8.5,
+    'depth': 10,
+    'latitude': -5.0,
+    'longitude': 153.0,
+    'cdi': 7,
+    'mmi': 8,
+    'sig': 900,
+    'gap': 30
+}
+
+# Example 2: Moderate deep earthquake (low tsunami risk)
+example2 = {
+    'magnitude': 6.8,
+    'depth': 150,
+    'latitude': 36.0,
+    'longitude': 140.0,
+    'cdi': 5,
+    'mmi': 5,
+    'sig': 600,
+    'gap': 40
+}
+
+# Process examples
+for i, example in enumerate([example1, example2], 1):
+    alert = tsunami_alert_system(example)
+    print(f"\nExample {i} - M{example['magnitude']} at {example['depth']}km depth:")
+    print(f"Tsunami probability: {alert['tsunami_probability']:.2%}")
+    print(f"Alert level: {alert['alert_level']}")
+    print(f"Recommendation: {alert['recommendation']}")
+
+# Test with real data from testing dataset if available
+try:
+    test_data = pd.read_csv(TEST_DATA_PATH)
+    print("\nTesting with real earthquake data from test dataset...")
+    
+    # Take a sample of 5 earthquakes from the test data
+    sample_earthquakes = test_data.sample(min(5, len(test_data)))
+    
+    for i, (_, earthquake) in enumerate(sample_earthquakes.iterrows(), 1):
+        # Convert to dictionary
+        eq_dict = earthquake.to_dict()
+        
+        # Run prediction
+        alert = tsunami_alert_system(eq_dict)
+        
+        # Get actual tsunami value if available
+        actual_tsunami = "Unknown"
+        if 'tsunami' in earthquake:
+            actual_tsunami = "Yes" if earthquake['tsunami'] == 1 else "No"
+        
+        # Get location info
+        location = eq_dict.get('location', 'Unknown')
+        if pd.isna(location) or location == "":
+            location = f"({eq_dict['latitude']}, {eq_dict['longitude']})"
+        
+        # Print results
+        print(f"\nTest Earthquake {i}:")
+        print(f"Location: {location}")
+        print(f"Magnitude: {eq_dict['magnitude']}, Depth: {eq_dict['depth']}km")
+        print(f"Tsunami probability: {alert['tsunami_probability']:.2%}")
+        print(f"Alert level: {alert['alert_level']}")
+        print(f"Actual tsunami: {actual_tsunami}")
+        
+except Exception as e:
+    print(f"\nCould not test with dataset: {e}")
+    
+# Save the trained model
+import joblib
+joblib.dump(pipeline, 'tsunami_prediction_model.pkl')
+print("\nModel saved as 'tsunami_prediction_model.pkl'")
+
+# Create a visualization of the relationship between magnitude, depth, and tsunami occurrence
+plt.figure(figsize=(12, 10))
+scatter = plt.scatter(earthquake_data['magnitude'], 
+                     earthquake_data['depth'], 
+                     c=earthquake_data['tsunami'],
+                     cmap='coolwarm', 
+                     alpha=0.6,
+                     s=earthquake_data['magnitude']*5)
+
+plt.colorbar(scatter, label='Tsunami Occurrence')
+plt.axhline(y=70, color='green', linestyle='--', label='70km depth threshold')
+plt.axvline(x=7.0, color='red', linestyle='--', label='Magnitude 7.0 threshold')
+plt.xlabel('Magnitude')
+plt.ylabel('Depth (km)')
+plt.title('Relationship between Earthquake Magnitude, Depth, and Tsunami Occurrence')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.savefig('tsunami_predictor_magnitude_depth.png')
+print("Magnitude-depth relationship plot saved as 'tsunami_predictor_magnitude_depth.png'")
+
+print("\nTsunami prediction model setup complete!")

@@ -1,0 +1,156 @@
+# tsunami_monitor.py
+import requests
+import pandas as pd
+import numpy as np
+import joblib
+import time
+import datetime
+
+# Load the trained model
+print("Loading tsunami prediction model...")
+model = joblib.load('tsunami_prediction_model.pkl')
+
+# USGS Earthquake API URL - Real-time earthquake data (past day, magnitude 4.5+)
+USGS_API_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
+
+def fetch_recent_earthquakes():
+    """Fetch recent significant earthquakes from USGS"""
+    try:
+        response = requests.get(USGS_API_URL)
+        if response.status_code == 200:
+            data = response.json()
+            return data['features']
+        else:
+            print(f"Error fetching earthquake data: {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"Error fetching earthquake data: {e}")
+        return []
+
+def process_earthquake(earthquake):
+    """Process earthquake data and format it for our model"""
+    properties = earthquake['properties']
+    geometry = earthquake['geometry']
+    
+    # Extract coordinates
+    longitude, latitude = geometry['coordinates'][0:2]
+    
+    # Extract other properties
+    magnitude = properties.get('mag')
+    depth = geometry['coordinates'][2]
+    place = properties.get('place', 'Unknown location')
+    time_ms = properties.get('time')
+    
+    # Convert time from milliseconds to readable format
+    event_time = datetime.datetime.fromtimestamp(time_ms/1000)
+    
+    # Additional properties needed for our model
+    cdi = properties.get('cdi', np.nan)
+    mmi = properties.get('mmi', np.nan)
+    sig = properties.get('sig', np.nan)
+    gap = properties.get('gap', np.nan)
+    
+    # Format data for our model
+    earthquake_data = {
+        'magnitude': magnitude,
+        'depth': depth,
+        'latitude': latitude,
+        'longitude': longitude,
+        'cdi': cdi,
+        'mmi': mmi,
+        'sig': sig,
+        'gap': gap,
+        'place': place,
+        'time': event_time
+    }
+    
+    return earthquake_data
+
+def tsunami_alert_system(earthquake_data, pipeline):
+    """Generate tsunami alert for an earthquake"""
+    # Extract features used in the model
+    features = ['magnitude', 'depth', 'latitude', 'longitude']
+    
+    # Add optional features if they're in the model
+    optional_features = ['cdi', 'mmi', 'sig', 'gap']
+    for feature in optional_features:
+        if feature in earthquake_data:
+            features.append(feature)
+    
+    # Create dataframe for prediction
+    input_df = pd.DataFrame([{k: earthquake_data[k] for k in features if k in earthquake_data}])
+    
+    # Fill missing values with median (simple imputation)
+    for col in input_df.columns:
+        if input_df[col].isnull().any():
+            input_df[col] = input_df[col].fillna(0)
+    
+    # Get tsunami probability
+    tsunami_prob = pipeline.predict_proba(input_df)[0, 1]
+    
+    # Define alert levels
+    if tsunami_prob < 0.2:
+        alert_level = "Low Risk"
+        recommendation = "No immediate action required. Continue monitoring."
+    elif tsunami_prob < 0.5:
+        alert_level = "Medium Risk"
+        recommendation = "Be prepared. Monitor official channels for updates."
+    elif tsunami_prob < 0.8:
+        alert_level = "High Risk"
+        recommendation = "Prepare for possible evacuation. Follow official guidance."
+    else:
+        alert_level = "Severe Risk"
+        recommendation = "Immediate evacuation from coastal areas is recommended."
+    
+    return {
+        "tsunami_probability": tsunami_prob,
+        "alert_level": alert_level,
+        "recommendation": recommendation,
+        "earthquake_magnitude": earthquake_data['magnitude'],
+        "earthquake_depth": earthquake_data['depth'],
+        "location": earthquake_data['place'],
+        "time": earthquake_data['time']
+    }
+
+def monitor_earthquakes():
+    """Monitor earthquakes and generate tsunami alerts"""
+    print(f"Starting tsunami monitoring at {datetime.datetime.now()}")
+    print("Checking for recent earthquakes...")
+    
+    earthquakes = fetch_recent_earthquakes()
+    
+    if not earthquakes:
+        print("No significant earthquakes found.")
+        return
+    
+    print(f"Found {len(earthquakes)} significant earthquakes in the past 24 hours.")
+    
+    for i, eq in enumerate(earthquakes, 1):
+        earthquake_data = process_earthquake(eq)
+        
+        # Skip if magnitude is too low (unlikely to cause a tsunami)
+        if earthquake_data['magnitude'] < 5.5:
+            continue
+        
+        # Generate tsunami alert
+        alert = tsunami_alert_system(earthquake_data, model)
+        
+        # Print the alert
+        print("\n" + "="*80)
+        print(f"EARTHQUAKE {i}: {earthquake_data['place']} at {earthquake_data['time']}")
+        print(f"Magnitude: {earthquake_data['magnitude']}, Depth: {earthquake_data['depth']} km")
+        print(f"TSUNAMI PROBABILITY: {alert['tsunami_probability']:.2%}")
+        print(f"ALERT LEVEL: {alert['alert_level']}")
+        print(f"RECOMMENDATION: {alert['recommendation']}")
+        print("="*80)
+
+# Run the monitoring function
+if __name__ == "__main__":
+    monitor_earthquakes()
+    
+    # For continuous monitoring, uncomment the following:
+
+    while True:
+        monitor_earthquakes()
+        print("\nWaiting 1 minute before next check...")
+        time.sleep(60)  # Wait 1 minute
